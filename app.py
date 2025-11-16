@@ -223,104 +223,79 @@ def generate_player_html(audio_path, chunks):
     html = f"""
     <style>
         .audio-player-container {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-        }}
-
-        .audio-player-inner {{
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
+            font-family: var(--font, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+            background: var(--background-fill-primary);
+            border: 1px solid var(--border-color-primary);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-lg);
         }}
 
         .audio-player {{
             width: 100%;
-            margin-bottom: 20px;
-            border-radius: 8px;
+            margin-bottom: var(--spacing-md);
+            border-radius: var(--radius-md);
             outline: none;
         }}
 
         .transcript-container {{
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 25px;
+            background: var(--background-fill-secondary);
+            border: 1px solid var(--border-color-primary);
+            border-radius: var(--radius-md);
+            padding: var(--spacing-lg);
             min-height: 150px;
-            max-height: 400px;
+            max-height: 500px;
             overflow-y: auto;
         }}
 
         .transcript-text {{
-            line-height: 2.2;
-            font-size: 18px;
-            color: #212529;
+            line-height: 1.8;
+            font-size: var(--text-md);
+            color: var(--body-text-color);
         }}
 
         .word {{
             display: inline-block;
-            padding: 4px 6px;
-            margin: 2px;
-            border-radius: 4px;
+            padding: 2px 4px;
+            margin: 1px;
+            border-radius: var(--radius-sm);
             cursor: pointer;
-            transition: all 0.2s ease;
+            transition: all 0.15s ease;
         }}
 
         .word:hover {{
-            background-color: #e3f2fd;
-            transform: translateY(-2px);
+            background-color: var(--color-accent-soft);
         }}
 
         .word.highlighted {{
-            background-color: #ffeb3b;
-            font-weight: bold;
-            box-shadow: 0 2px 8px rgba(255, 235, 59, 0.5);
-            transform: scale(1.05);
-            animation: pulse 0.5s ease-in-out;
-        }}
-
-        @keyframes pulse {{
-            0%, 100% {{ opacity: 1; }}
-            50% {{ opacity: 0.8; }}
-        }}
-
-        .player-header {{
-            text-align: center;
-            margin-bottom: 15px;
-            color: white;
-            font-size: 1.3em;
+            background-color: var(--color-accent);
+            color: var(--body-text-color-subdued);
             font-weight: 600;
         }}
     </style>
     
     <div class="audio-player-container">
-        <div class="player-header">🎵 Interactive Audio Player</div>
-        <div class="audio-player-inner">
-            <audio id="audio_{unique_id}" class="audio-player" controls 
-                   ontimeupdate="(function(){{
-                       const audio = this;
-                       const currentTime = audio.currentTime;
-                       const words = audio.parentElement.querySelectorAll('.word');
-                       words.forEach(function(word) {{
-                           const start = parseFloat(word.getAttribute('data-start'));
-                           const end = parseFloat(word.getAttribute('data-end'));
-                           if (currentTime >= start && currentTime <= end) {{
-                               word.classList.add('highlighted');
-                               word.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
-                           }} else {{
-                               word.classList.remove('highlighted');
-                           }}
-                       }});
-                   }}).call(this)">
-                <source src="/gradio_api/file={audio_path}" type="audio/wav">
-                Your browser does not support the audio element.
-            </audio>
+        <audio id="audio_{unique_id}" class="audio-player" controls 
+               ontimeupdate="(function(){{
+                   const audio = this;
+                   const currentTime = audio.currentTime;
+                   const words = audio.parentElement.querySelectorAll('.word');
+                   words.forEach(function(word) {{
+                       const start = parseFloat(word.getAttribute('data-start'));
+                       const end = parseFloat(word.getAttribute('data-end'));
+                       if (currentTime >= start && currentTime <= end) {{
+                           word.classList.add('highlighted');
+                       }} else {{
+                           word.classList.remove('highlighted');
+                       }}
+                   }});
+               }}).call(this)">
+            <source src="/gradio_api/file={audio_path}" type="audio/wav">
+            Your browser does not support the audio element.
+        </audio>
 
-            <div class="transcript-container">
-                <div class="transcript-text">
-                    {transcript_html}
-                </div>
+        <div class="transcript-container">
+            <div class="transcript-text">
+                {transcript_html}
             </div>
         </div>
     </div>
