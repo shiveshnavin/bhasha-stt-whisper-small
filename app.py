@@ -151,7 +151,7 @@ class FWASR:
         """
         Returns a dict with text and segments list (each with start, end, text).
         The exact object returned by faster-whisper is a tuple (segments, info),
-        so we wrap it into a more consistent dict format.
+        so we wrap it into a more consistent dict format matching HuggingFace output.
         """
         segments_generator, info = self.model.transcribe(
             audio_path, 
@@ -165,15 +165,19 @@ class FWASR:
         # Convert generator to list and process
         segments_list = list(segments_generator)
         text = "".join([s.text for s in segments_list])
-        segs = []
-        for s in segments_list:
-            # s.start, s.end, s.text are expected attributes
-            seg_dict = {"start": float(s.start), "end": float(s.end), "text": s.text}
-            # Add word-level timestamps if available
-            if word_timestamps and hasattr(s, 'words') and s.words:
-                seg_dict["words"] = [{"word": w.word, "start": float(w.start), "end": float(w.end)} for w in s.words]
-            segs.append(seg_dict)
-        return {"text": text, "segments": segs, "info": dict(info._asdict()) if hasattr(info, "_asdict") else str(info)}
+        
+        # Build chunks in HF format (word-level)
+        chunks = []
+        if word_timestamps:
+            for s in segments_list:
+                if hasattr(s, 'words') and s.words:
+                    for w in s.words:
+                        chunks.append({
+                            "text": w.word,
+                            "timestamp": [float(w.start), float(w.end)]
+                        })
+        
+        return {"text": text.strip(), "chunks": chunks}
 
 # ------------------------
 # Gradio app glue
@@ -229,7 +233,7 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             fw = ensure_fw_loaded(fw_model_id)
             res = fw.transcribe(input_path, language="hi", word_timestamps=want_word_timestamps)
             text = res.get("text", "")
-            segments = res.get("segments", [])
+            segments = res.get("chunks", [])
             return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2)
 
         else:
