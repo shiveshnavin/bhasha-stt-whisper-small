@@ -200,12 +200,140 @@ def ensure_fw_loaded(model_id):
         FW_SINGLETON = FWASR(model_id=model_id)
     return FW_SINGLETON
 
+def generate_player_html(audio_path, chunks):
+    """
+    Generate interactive audio player with word highlighting.
+    """
+    if not chunks:
+        return "<p>No timestamps available for highlighting</p>"
+    
+    # Generate unique ID for this instance
+    unique_id = abs(hash(audio_path)) % 10000
+    
+    # Build the transcript HTML with inline onclick handlers
+    transcript_html = ""
+    for i, chunk in enumerate(chunks):
+        text = chunk.get("text", "")
+        timestamp = chunk.get("timestamp", [0, 0])
+        start_time = timestamp[0] if len(timestamp) > 0 else 0
+        end_time = timestamp[1] if len(timestamp) > 1 else 0
+        
+        transcript_html += f'<span class="word" data-start="{start_time}" data-end="{end_time}" data-index="{i}" onclick="document.getElementById(\'audio_{unique_id}\').currentTime={start_time}; document.getElementById(\'audio_{unique_id}\').play();">{text}</span>'
+    
+    html = f"""
+    <style>
+        .audio-player-container {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }}
+
+        .audio-player-inner {{
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+        }}
+
+        .audio-player {{
+            width: 100%;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            outline: none;
+        }}
+
+        .transcript-container {{
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            min-height: 150px;
+            max-height: 400px;
+            overflow-y: auto;
+        }}
+
+        .transcript-text {{
+            line-height: 2.2;
+            font-size: 18px;
+            color: #212529;
+        }}
+
+        .word {{
+            display: inline-block;
+            padding: 4px 6px;
+            margin: 2px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+
+        .word:hover {{
+            background-color: #e3f2fd;
+            transform: translateY(-2px);
+        }}
+
+        .word.highlighted {{
+            background-color: #ffeb3b;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(255, 235, 59, 0.5);
+            transform: scale(1.05);
+            animation: pulse 0.5s ease-in-out;
+        }}
+
+        @keyframes pulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.8; }}
+        }}
+
+        .player-header {{
+            text-align: center;
+            margin-bottom: 15px;
+            color: white;
+            font-size: 1.3em;
+            font-weight: 600;
+        }}
+    </style>
+    
+    <div class="audio-player-container">
+        <div class="player-header">🎵 Interactive Audio Player</div>
+        <div class="audio-player-inner">
+            <audio id="audio_{unique_id}" class="audio-player" controls 
+                   ontimeupdate="(function(){{
+                       const audio = this;
+                       const currentTime = audio.currentTime;
+                       const words = audio.parentElement.querySelectorAll('.word');
+                       words.forEach(function(word) {{
+                           const start = parseFloat(word.getAttribute('data-start'));
+                           const end = parseFloat(word.getAttribute('data-end'));
+                           if (currentTime >= start && currentTime <= end) {{
+                               word.classList.add('highlighted');
+                               word.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                           }} else {{
+                               word.classList.remove('highlighted');
+                           }}
+                       }});
+                   }}).call(this)">
+                <source src="/gradio_api/file={audio_path}" type="audio/wav">
+                Your browser does not support the audio element.
+            </audio>
+
+            <div class="transcript-container">
+                <div class="transcript-text">
+                    {transcript_html}
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+    
+    return html
+
 def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s):
     """
     Main function wired to Gradio interface.
     """
     if audio_file is None:
-        return "No audio uploaded", {}, "No audio"
+        return "No audio uploaded", {}, "No audio", ""
     # gradio provides a temporary file-like object, save to path
     input_path = safe_save_uploaded_file(audio_file)
 
@@ -225,24 +353,31 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             elif "segments" in res and res["segments"]:
                 segments = res["segments"]
             
-            return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2)
+            # Generate player HTML
+            player_html = generate_player_html(input_path, segments)
+            
+            return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2), player_html
 
         elif backend == "faster-whisper":
             if not FASTER_WHISPER_AVAILABLE:
-                return "faster-whisper not installed on server", {}, "faster-whisper not available"
+                return "faster-whisper not installed on server", {}, "faster-whisper not available", ""
             fw = ensure_fw_loaded(fw_model_id)
             res = fw.transcribe(input_path, language="hi", word_timestamps=want_word_timestamps)
             text = res.get("text", "")
             segments = res.get("chunks", [])
-            return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2)
+            
+            # Generate player HTML
+            player_html = generate_player_html(input_path, segments)
+            
+            return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2), player_html
 
         else:
-            return f"Unknown backend: {backend}", {}, ""
+            return f"Unknown backend: {backend}", {}, "", ""
 
     except Exception as e:
         tb = traceback.format_exc()
         print("[ERROR]", tb)
-        return f"Error during transcription: {e}\n\n{tb}", {}, ""
+        return f"Error during transcription: {e}\n\n{tb}", {}, "", ""
 
 # ------------------------
 # Build Gradio UI
@@ -257,7 +392,7 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
     with gr.Row():
         with gr.Column(scale=2):
             audio_in = gr.Audio(label="Upload audio", type="filepath")
-            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="huggingface", label="Backend")
+            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="faster-whisper", label="Backend")
             hf_model_id = gr.Textbox(label="HF model id", value=HF_MODEL_ID_DEFAULT, interactive=True)
             fw_model_id = gr.Textbox(label="faster-whisper model size", value="small", placeholder="tiny, base, small, medium, or large")
             chunk_length_s = gr.Slider(minimum=5, maximum=60, step=1, value=30, label="Chunk length (s)")
@@ -266,13 +401,14 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
             run_btn = gr.Button("Transcribe")
         with gr.Column(scale=3):
             txt_out = gr.Textbox(label="Transcription (plain text)", lines=8)
+            html_out = gr.HTML(label="🎵 Interactive Audio Player with Word Highlighting")
             seg_out = gr.JSON(label="Segments / chunks (if available)")
             raw_out = gr.Textbox(label="Raw result (JSON-ish)", lines=12)
 
     def _trigger(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, chunk_len):
         return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len))
 
-    run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s], outputs=[txt_out, seg_out, raw_out])
+    run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s], outputs=[txt_out, seg_out, raw_out, html_out])
  
 
 # Run
