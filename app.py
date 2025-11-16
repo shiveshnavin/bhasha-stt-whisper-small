@@ -303,7 +303,7 @@ def generate_player_html(audio_path, chunks):
     
     return html
 
-def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s):
+def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language):
     """
     Main function wired to Gradio interface.
     """
@@ -337,7 +337,7 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             if not FASTER_WHISPER_AVAILABLE:
                 return "faster-whisper not installed on server", {}, "faster-whisper not available", ""
             fw = ensure_fw_loaded(fw_model_id)
-            res = fw.transcribe(input_path, language="hi", word_timestamps=want_word_timestamps)
+            res = fw.transcribe(input_path, language=language, word_timestamps=want_word_timestamps)
             text = res.get("text", "")
             segments = res.get("chunks", [])
             
@@ -371,6 +371,7 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
             hf_model_id = gr.Textbox(label="HF model id", value=HF_MODEL_ID_DEFAULT, interactive=True)
             fw_model_id = gr.Textbox(label="faster-whisper model size", value="small", placeholder="tiny, base, small, medium, or large")
             chunk_length_s = gr.Slider(minimum=5, maximum=60, step=1, value=30, label="Chunk length (s)")
+            language = gr.Textbox(label="Language code (faster-whisper)", value="hi", placeholder="hi, en, es, etc.")
             want_word_timestamps = gr.Checkbox(label="Request word-level timestamps (if model supports it)", value=True)
             force_hindi = gr.Checkbox(label="Force Hindi decoding tokens", value=True)
             run_btn = gr.Button("Transcribe")
@@ -380,10 +381,10 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
             seg_out = gr.JSON(label="Segments / chunks (if available)")
             raw_out = gr.Textbox(label="Raw result (JSON-ish)", lines=12)
 
-    def _trigger(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, chunk_len):
-        return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len))
+    def _trigger(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, chunk_len, lang):
+        return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len), lang)
 
-    run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s], outputs=[txt_out, seg_out, raw_out, html_out])
+    run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language], outputs=[txt_out, seg_out, raw_out, html_out])
  
 
 # Run
