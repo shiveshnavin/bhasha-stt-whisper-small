@@ -1,0 +1,7 @@
+gradio>=3.0
+torch
+transformers
+accelerate
+faster-whisper
+# optional for faster inference:
+# faster-whisper
