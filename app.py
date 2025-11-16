@@ -133,28 +133,46 @@ class HFASR:
 # faster-whisper backend
 # ------------------------
 class FWASR:
-    def __init__(self, model_id="openai/whisper-small", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16"):
+    def __init__(self, model_id="small", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="int8"):
         if not FASTER_WHISPER_AVAILABLE:
             raise ImportError("faster-whisper is not installed")
         self.device = device
-        self.compute_type = compute_type
+        # Use int8 for CPU, float16 for CUDA
+        if device == "cpu":
+            self.compute_type = "int8"
+        else:
+            self.compute_type = compute_type
         self.model_id = model_id
-        print(f"[FW] Loading faster-whisper model {model_id} on {device} compute_type={compute_type}")
-        # NOTE: faster-whisper models are usually loaded by model name
+        print(f"[FW] Loading faster-whisper model {model_id} on {device} compute_type={self.compute_type}")
+        # NOTE: faster-whisper expects model size names like "tiny", "base", "small", "medium", "large"
         self.model = FWWhisperModel(self.model_id, device=self.device, compute_type=self.compute_type)
 
-    def transcribe(self, audio_path: str, language: str = "hi", task: str = "transcribe", beam_size: int = 5, vad_filter: bool = False):
+    def transcribe(self, audio_path: str, language: str = "hi", task: str = "transcribe", beam_size: int = 5, vad_filter: bool = False, word_timestamps: bool = False):
         """
         Returns a dict with text and segments list (each with start, end, text).
         The exact object returned by faster-whisper is a tuple (segments, info),
         so we wrap it into a more consistent dict format.
         """
-        segments, info = self.model.transcribe(audio_path, beam_size=beam_size, language=language, vad_filter=vad_filter, task=task)
-        text = "".join([s.text for s in segments])
+        segments_generator, info = self.model.transcribe(
+            audio_path, 
+            beam_size=beam_size, 
+            language=language, 
+            vad_filter=vad_filter, 
+            task=task,
+            word_timestamps=word_timestamps
+        )
+        
+        # Convert generator to list and process
+        segments_list = list(segments_generator)
+        text = "".join([s.text for s in segments_list])
         segs = []
-        for s in segments:
+        for s in segments_list:
             # s.start, s.end, s.text are expected attributes
-            segs.append({"start": float(s.start), "end": float(s.end), "text": s.text})
+            seg_dict = {"start": float(s.start), "end": float(s.end), "text": s.text}
+            # Add word-level timestamps if available
+            if word_timestamps and hasattr(s, 'words') and s.words:
+                seg_dict["words"] = [{"word": w.word, "start": float(w.start), "end": float(w.end)} for w in s.words]
+            segs.append(seg_dict)
         return {"text": text, "segments": segs, "info": dict(info._asdict()) if hasattr(info, "_asdict") else str(info)}
 
 # ------------------------
@@ -172,6 +190,8 @@ def ensure_hf_loaded(model_id):
 
 def ensure_fw_loaded(model_id):
     global FW_SINGLETON
+    # Strip whitespace and convert common variations
+    model_id = model_id.strip()
     if FW_SINGLETON is None or FW_SINGLETON.model_id != model_id:
         FW_SINGLETON = FWASR(model_id=model_id)
     return FW_SINGLETON
@@ -192,20 +212,22 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             res = hf.transcribe(input_path, return_timestamps=rt_arg, force_hindi=force_hindi, chunk_length_s=chunk_length_s)
             # Normalize result into text + segments if possible
             text = res.get("text", "")
-            # possible key names to look for
-            segments = res.get("chunks") or res.get("segments") or res.get("word_timestamps") or res.get("chunks") or []
-            # if word_timestamps is present and is a list of {"word","start","end"}, transform to segments
-            if isinstance(segments, list) and len(segments) and isinstance(segments[0], dict):
-                structured = segments
-            else:
-                structured = []
-            return text, structured, json.dumps(res, default=str, ensure_ascii=False, indent=2)
+            
+            # Extract timestamps/chunks
+            segments = []
+            if "chunks" in res and res["chunks"]:
+                # Word-level or chunk-level timestamps
+                segments = res["chunks"]
+            elif "segments" in res and res["segments"]:
+                segments = res["segments"]
+            
+            return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2)
 
         elif backend == "faster-whisper":
             if not FASTER_WHISPER_AVAILABLE:
                 return "faster-whisper not installed on server", {}, "faster-whisper not available"
             fw = ensure_fw_loaded(fw_model_id)
-            res = fw.transcribe(input_path, language="hi")
+            res = fw.transcribe(input_path, language="hi", word_timestamps=want_word_timestamps)
             text = res.get("text", "")
             segments = res.get("segments", [])
             return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2)
@@ -221,16 +243,21 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
 # ------------------------
 # Build Gradio UI
 # ------------------------
-with gr.Blocks(title="ASR demo (HF + optional faster-whisper)") as demo:
-    gr.Markdown("# ASR demo — Hugging Face / faster-whisper")
+with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
+    gr.Markdown("# Bhasha ASR demo — Hugging Face / faster-whisper")
+    gr.Markdown("""
+    **Instructions:**
+    - **Hugging Face backend**: Use full model IDs like `vasista22/whisper-hindi-small`
+    - **faster-whisper backend**: Use model sizes only: `tiny`, `base`, `small`, `medium`, or `large`
+    """)
     with gr.Row():
         with gr.Column(scale=2):
             audio_in = gr.Audio(label="Upload audio", type="filepath")
-            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="huggingface" if FASTER_WHISPER_AVAILABLE else "huggingface", label="Backend")
+            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="huggingface", label="Backend")
             hf_model_id = gr.Textbox(label="HF model id", value=HF_MODEL_ID_DEFAULT, interactive=True)
-            fw_model_id = gr.Textbox(label="faster-whisper model id (if using faster-whisper)", value="openai/whisper-small")
+            fw_model_id = gr.Textbox(label="faster-whisper model size", value="small", placeholder="tiny, base, small, medium, or large")
             chunk_length_s = gr.Slider(minimum=5, maximum=60, step=1, value=30, label="Chunk length (s)")
-            want_word_timestamps = gr.Checkbox(label="Request word-level timestamps (if model supports it)", value=False)
+            want_word_timestamps = gr.Checkbox(label="Request word-level timestamps (if model supports it)", value=True)
             force_hindi = gr.Checkbox(label="Force Hindi decoding tokens", value=True)
             run_btn = gr.Button("Transcribe")
             note = gr.Markdown("Tips: Use smaller chunk length for shorter audio to avoid memory spikes. If using `faster-whisper`, make sure it is installed on the server.")
