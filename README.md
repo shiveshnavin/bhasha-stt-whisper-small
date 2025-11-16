@@ -36,6 +36,9 @@ A speech-to-text (STT) application for Hindi audio transcription using Whisper m
    - Adjust chunk length (5-60 seconds)
 4. Click "Transcribe" to process
 
+## Notes
+If you plan to run large models on GPU, prefer `torch_dtype=torch.float16` and `device_map='auto'` when loading the HF model.\n- For accurate word-level timestamps, many community HF models don't provide precise word timestamps — use an alignment step (e.g., whisperx) if you need frame-accurate times.
+
 ## Installation
 
 ```bash

@@ -264,7 +264,6 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
             want_word_timestamps = gr.Checkbox(label="Request word-level timestamps (if model supports it)", value=True)
             force_hindi = gr.Checkbox(label="Force Hindi decoding tokens", value=True)
             run_btn = gr.Button("Transcribe")
-            note = gr.Markdown("Tips: Use smaller chunk length for shorter audio to avoid memory spikes. If using `faster-whisper`, make sure it is installed on the server.")
         with gr.Column(scale=3):
             txt_out = gr.Textbox(label="Transcription (plain text)", lines=8)
             seg_out = gr.JSON(label="Segments / chunks (if available)")
@@ -274,9 +273,7 @@ with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
         return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len))
 
     run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s], outputs=[txt_out, seg_out, raw_out])
-
-    # Footer
-    gr.Markdown("## Notes\n- If you plan to run large models on GPU, prefer `torch_dtype=torch.float16` and `device_map='auto'` when loading the HF model.\n- For accurate word-level timestamps, many community HF models don't provide precise word timestamps — use an alignment step (e.g., whisperx) if you need frame-accurate times.")
+ 
 
 # Run
 if __name__ == "__main__":
