@@ -3,5 +3,7 @@ torch
 transformers
 accelerate
 faster-whisper
+whisperx
+soundfile
 # optional for faster inference:
 # faster-whisper

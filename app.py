@@ -18,8 +18,19 @@ import tempfile
 import traceback
 from typing import Dict, Any, List
 
+
 import gradio as gr
 import torch
+
+# Optional: Try to import whisperx and soundfile for alignment mode
+try:
+    import whisperx
+    import soundfile as sf
+    WHISPERX_AVAILABLE = True
+except Exception:
+    whisperx = None
+    sf = None
+    WHISPERX_AVAILABLE = False
 
 # Transformers imports (for HF pipeline)
 from transformers import (
@@ -303,10 +314,47 @@ def generate_player_html(audio_path, chunks):
     
     return html
 
-def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language):
+
+def align_gradio(audio_file, transcript_text, language_code="hi"):
+    """
+    Alignment mode: align transcript to audio using whisperx.
+    Returns: text, segments, raw_json, player_html (same as STT modes)
+    """
+    if not WHISPERX_AVAILABLE:
+        return "whisperx not installed", [], "", ""
+    if audio_file is None or not transcript_text:
+        return "Audio and transcript required", [], "", ""
+    try:
+        input_path = safe_save_uploaded_file(audio_file)
+        # Get duration
+        with sf.SoundFile(input_path) as f:
+            duration = len(f) / f.samplerate
+        audio = whisperx.load_audio(input_path)
+        model_a, metadata = whisperx.load_align_model(language_code=language_code, device="cpu")
+        formatted_transcript = [{
+            "text": transcript_text.strip(),
+            "start": 0.0,
+            "end": round(duration, 2)
+        }]
+        result = whisperx.align(formatted_transcript, model_a, metadata, audio, "cpu")
+        word_data = result["word_segments"]
+        # Compose output in same format as STT
+        transcript_text_out = ' '.join([w["word"] for w in word_data])
+        segments = [{"text": w["word"], "timestamp": [w["start"], w["end"]]} for w in word_data]
+        raw_json = json.dumps(result, ensure_ascii=False, indent=2)
+        player_html = generate_player_html(input_path, segments)
+        return transcript_text_out, segments, raw_json, player_html
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("[ALIGN ERROR]", tb)
+        return f"Error during alignment: {e}\n\n{tb}", [], "", ""
+
+def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language, align_mode=False, align_transcript=""):
     """
     Main function wired to Gradio interface.
     """
+    if align_mode:
+        return align_gradio(audio_file, align_transcript, language_code=language)
     if audio_file is None:
         return "No audio uploaded", {}, "No audio", ""
     # gradio provides a temporary file-like object, save to path
@@ -319,20 +367,14 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             res = hf.transcribe(input_path, return_timestamps=rt_arg, force_hindi=force_hindi, chunk_length_s=chunk_length_s)
             # Normalize result into text + segments if possible
             text = res.get("text", "")
-            
             # Extract timestamps/chunks
             segments = []
             if "chunks" in res and res["chunks"]:
-                # Word-level or chunk-level timestamps
                 segments = res["chunks"]
             elif "segments" in res and res["segments"]:
                 segments = res["segments"]
-            
-            # Generate player HTML
             player_html = generate_player_html(input_path, segments)
-            
             return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2), player_html
-
         elif backend == "faster-whisper":
             if not FASTER_WHISPER_AVAILABLE:
                 return "faster-whisper not installed on server", {}, "faster-whisper not available", ""
@@ -340,15 +382,10 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
             res = fw.transcribe(input_path, language=language, word_timestamps=want_word_timestamps)
             text = res.get("text", "")
             segments = res.get("chunks", [])
-            
-            # Generate player HTML
             player_html = generate_player_html(input_path, segments)
-            
             return text, segments, json.dumps(res, default=str, ensure_ascii=False, indent=2), player_html
-
         else:
             return f"Unknown backend: {backend}", {}, "", ""
-
     except Exception as e:
         tb = traceback.format_exc()
         print("[ERROR]", tb)
@@ -357,35 +394,41 @@ def transcribe_gradio(audio_file, backend, hf_model_id, fw_model_id, want_word_t
 # ------------------------
 # Build Gradio UI
 # ------------------------
-with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper)") as demo:
-    gr.Markdown("# Bhasha ASR demo — Hugging Face / faster-whisper")
+
+with gr.Blocks(title="Bhasha ASR demo (HF + optional faster-whisper + align)") as demo:
+    gr.Markdown("# Bhasha ASR demo — Hugging Face / faster-whisper / Alignment mode")
     gr.Markdown("""
     **Instructions:**
     - **Hugging Face backend**: Use full model IDs like `vasista22/whisper-hindi-small`
     - **faster-whisper backend**: Use model sizes only: `tiny`, `base`, `small`, `medium`, or `large`
+    - **Alignment mode**: Provide both audio and the original transcript to align words to audio.
     """)
     with gr.Row():
         with gr.Column(scale=2):
+            mode = gr.Radio(choices=["stt", "align"], value="stt", label="Mode: STT or Align?")
             audio_in = gr.Audio(label="Upload audio", type="filepath")
-            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="faster-whisper", label="Backend")
+            align_transcript = gr.Textbox(label="Transcript (for alignment mode)", value="", placeholder="Paste transcript here", visible=True)
+            backend = gr.Radio(choices=["huggingface", "faster-whisper"], value="faster-whisper", label="Backend (STT mode only)")
             hf_model_id = gr.Textbox(label="HF model id", value=HF_MODEL_ID_DEFAULT, interactive=True)
             fw_model_id = gr.Textbox(label="faster-whisper model size", value="small", placeholder="tiny, base, small, medium, or large")
             chunk_length_s = gr.Slider(minimum=5, maximum=60, step=1, value=30, label="Chunk length (s)")
-            language = gr.Textbox(label="Language code (faster-whisper)", value="hi", placeholder="hi, en, es, etc.")
+            language = gr.Textbox(label="Language code (hi, en, etc.)", value="hi", placeholder="hi, en, es, etc.")
             want_word_timestamps = gr.Checkbox(label="Request word-level timestamps (if model supports it)", value=True)
             force_hindi = gr.Checkbox(label="Force Hindi decoding tokens", value=True)
-            run_btn = gr.Button("Transcribe")
+            run_btn = gr.Button("Transcribe / Align")
         with gr.Column(scale=3):
             txt_out = gr.Textbox(label="Transcription (plain text)", lines=8)
             html_out = gr.HTML(label="🎵 Interactive Audio Player with Word Highlighting")
             seg_out = gr.JSON(label="Segments / chunks (if available)")
             raw_out = gr.Textbox(label="Raw result (JSON-ish)", lines=12)
 
-    def _trigger(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, chunk_len, lang):
-        return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len), lang)
+    def _trigger(audio, mode_choice, align_txt, backend_choice, hf_mid, fw_mid, want_ts, force_hi, chunk_len, lang):
+        if mode_choice == "align":
+            return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len), lang, align_mode=True, align_transcript=align_txt)
+        else:
+            return transcribe_gradio(audio, backend_choice, hf_mid, fw_mid, want_ts, force_hi, int(chunk_len), lang, align_mode=False, align_transcript="")
 
-    run_btn.click(_trigger, inputs=[audio_in, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language], outputs=[txt_out, seg_out, raw_out, html_out])
- 
+    run_btn.click(_trigger, inputs=[audio_in, mode, align_transcript, backend, hf_model_id, fw_model_id, want_word_timestamps, force_hindi, chunk_length_s, language], outputs=[txt_out, seg_out, raw_out, html_out])
 
 # Run
 if __name__ == "__main__":
